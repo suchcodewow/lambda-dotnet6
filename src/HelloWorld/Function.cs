@@ -7,6 +7,13 @@ using System.Text.Json;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.APIGatewayEvents;
 
+// Dynatrace-Start
+using Dynatrace.OpenTelemetry;
+using Dynatrace.OpenTelemetry.Instrumentation.AwsLambda;
+using OpenTelemetry;
+using OpenTelemetry.Instrumentation.AWSLambda;
+using OpenTelemetry.Trace;
+
 // Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -16,33 +23,37 @@ namespace HelloWorld
     public class Function
     {
 
-        private static readonly HttpClient client = new HttpClient();
+        private static readonly TracerProvider TracerProvider;
 
-        private static async Task<string> GetCallingIP()
+        static Function()
         {
-            client.DefaultRequestHeaders.Accept.Clear();
-            client.DefaultRequestHeaders.Add("User-Agent", "AWS Lambda .Net Client");
-
-            var msg = await client.GetStringAsync("http://checkip.amazonaws.com/").ConfigureAwait(continueOnCapturedContext:false);
-
-            return msg.Replace("\n","");
+            DynatraceSetup.InitializeLogging();
+            TracerProvider = Sdk.CreateTracerProviderBuilder()
+                .AddDynatrace()
+                // Configures AWS Lambda invocations tracing
+                .AddAWSLambdaConfigurations(c => c.DisableAwsXRayContextExtraction = true)
+                // Instrumentation for creation of span (Activity) representing AWS SDK call.
+                // Can be omitted if there are no outgoing AWS SDK calls to other AWS Lambdas and/or calls to AWS services like DynamoDB and SQS.
+                .AddAWSInstrumentation(c => c.SuppressDownstreamInstrumentation = true)
+                // Adds injection of Dynatrace-specific context information in certain SDK calls (e.g. Lambda Invoke).
+                // Can be omitted if there are no outgoing calls to other Lambdas via the AWS Lambda SDK.
+                .AddDynatraceAwsSdkInjection()
+                .Build();
         }
 
-        public async Task<APIGatewayProxyResponse> FunctionHandler(APIGatewayProxyRequest apigProxyEvent, ILambdaContext context)
+        public APIGatewayHttpApiV2ProxyResponse FunctionHandler(APIGatewayHttpApiV2ProxyRequest request, ILambdaContext context)
         {
+            return AWSLambdaWrapper.Trace(TracerProvider, FunctionHandlerInternal, request, context);
+        }
 
-            var location = await GetCallingIP();
-            var body = new Dictionary<string, string>
-            {
-                { "message", "hello world" },
-                { "location", location }
-            };
+        private APIGatewayHttpApiV2ProxyResponse FunctionHandlerInternal(APIGatewayHttpApiV2ProxyRequest request, ILambdaContext context)
+        {
+            // This is just an example of function handler and should be replaced by actual code.
 
-            return new APIGatewayProxyResponse
+            return new APIGatewayHttpApiV2ProxyResponse
             {
-                Body = JsonSerializer.Serialize(body),
                 StatusCode = 200,
-                Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+                Body = "Example function result",
             };
         }
     }
